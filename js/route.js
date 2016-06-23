@@ -1,3 +1,11 @@
+var mailer = require('./config/mailer.js');
+var User = require('./model/user');
+
+var transporter = mailer.transporter;
+var host, signup_id = 0, reset_id = 0;
+var email, password;
+var email_reset;
+
 module.exports = function(app, passport){
 
 	app.get('/', function(req, res){
@@ -6,10 +14,6 @@ module.exports = function(app, passport){
 
 	app.get('/login', function(req, res){
 		res.render('login.ejs', { message_type:"danger" ,message: req.flash("loginMessage") }); 
-	});	
-
-	app.get('/index', function(req, res){
-		res.render('index.ejs'); 
 	});	
 
 	app.get('/signup', function(req, res){
@@ -22,11 +26,156 @@ module.exports = function(app, passport){
 		failureFlash : true
 	}));
 
-	app.post('/signup', passport.authenticate('signup', {//use the method created in passport.js
-        successRedirect : '/', 
-        failureRedirect : '/signup', 
-        failureFlash : true 
-    }));	
+	// process the signup form
+	app.post('/signup', function(req, res){
+		email = req.body.email;
+		password = req.body.password;
+
+		User.findOne({ 'local.email' : email }, function(err, user) {
+
+            if (user) {
+            	console.log("taken");
+                res.render('signup.ejs', {  message_type:"error", message: "The email address has already been taken." });
+
+            } else {
+
+            	res.render('login.ejs', {  message_type:"info", message: "Please check your email for verification" });
+
+			    signup_id=Math.floor((Math.random() * 100) + 54);
+			    host=req.get('host');
+			    signup_link="http://"+req.get('host')+"/verify?id="+signup_id;
+			    
+				var mailOptions = {
+				    from: '"Pilotfish" <albert.yuebai@pilotfish.eu>', // sender address
+				    to: email, // list of receivers
+				    subject: 'Please Confirm your Signup', // Subject line
+				    text: 'If you are sure to signup, please click this link', // plaintext body
+				    html: 'Hello,<br> Please Click on the link to verify your email.<br><a href='+signup_link+'>Click here to verify</a>' // html body
+				};
+
+				console.log(email);
+				// // send mail with defined transport object
+				transporter.sendMail(mailOptions, function(error, info){
+				    if(error){
+				    	console.log("error");
+				        return console.log(error);
+				    }
+				    console.log('Message sent: ' + info.response);
+				});	
+				console.log("end");
+
+            }
+        });
+	});
+
+	app.get('/verify', function(req, res){
+	//save the data to database
+
+		if(signup_id == req.query.id){
+
+	        var newUser = new User();
+
+	        // set the user's local credentials
+	        newUser.local.email    = email;
+	        newUser.local.password = newUser.generateHash(password); // use the generateHash function in our user model
+
+	        newUser.save(function(err) {
+	            if (err)
+	                throw err;
+	        });
+	        res.render('login.ejs', { message_type:"success", message: "Sign up succeed!" });
+
+		}else{
+			res.render('login.ejs', { message_type:"danger", message: "Sorry, please try again." });
+
+		}
+
+	});
+
+	app.get('/forget', function(req, res) {
+		res.render('forget.ejs', {message:"",message_type:""});
+	});
+
+	app.post('/forget', function(req, res){
+		var email = req.body.email;
+		email_reset = email;
+
+		User.findOne({ 'local.email' : email }, function(err, user) {
+            if (user) {
+            	res.render('login.ejs', {  message_type:"info", message: "Please check your email for verification" });
+
+			    reset_id=Math.floor((Math.random() * 100) + 54);
+			    host=req.get('host');
+			    link="http://"+req.get('host')+"/reset?id="+reset_id;
+			    
+				var mailOptions = {
+				    from: '"Pilotfish" <albert.yuebai@pilotfish.eu>', // sender address
+				    to: email_reset, // list of receivers
+				    subject: 'Please Confirm your Email to Reset Password for Moog Online Guideline Account', // Subject line
+				    text: 'If you are sure to signup, please click this link', // plaintext body
+				    html: 'Hello,<br> Please Click on the link to verify your email.<br><a href='+link+'>Click here to verify</a>' // html body
+				};
+
+				transporter.sendMail(mailOptions, function(error, info){
+				    if(error){
+				        return console.log(error);
+				    }
+				    console.log('Message sent: ' + info.response);
+				});	
+                
+
+            } else { //if the email is not in the list
+            	res.render('forget.ejs', {  message_type:"error", message: "Sorry, we can't find this email address." });
+            }
+        });
+	});
+
+	app.get('/reset', function(req, res) {
+		if(reset_id == req.query.id){
+			res.render('reset.ejs', {message:"",message_type:""});
+		}else{
+			res.render('login.ejs', {message_type:"danger", message: "Sorry, please try again.." });
+		}	
+	});
+
+	app.post('/reset', function(req, res){
+
+		var password = req.body.password;
+		var password_1 = req.body.password_1;
+		var newUser = new User();
+		
+		if(password != password_1){
+			res.render('reset.ejs', {message_type:"error", message: "The passwords are not the same." });
+		}else{
+	        var conditions = { "local.email": email_reset }
+			  , update = {local: {email: email_reset,password:newUser.generateHash(password)} }
+			  , options = { multi: true };
+
+			User.update(conditions, update, options, callback);
+
+			function callback (err, numAffected) {
+			  console.log(numAffected + " line have been affected");
+			};
+	        res.render('login.ejs', {message_type:"success", message: "The new password has been set." });
+		}
+	});	
+
+	app.get('/index', isLoggedIn, function(req, res){
+		res.render('index.ejs', {
+			user : req.user
+		}); 
+	});	
+
+	function isLoggedIn(req, res, next) {
+
+		// if user is authenticated in the session, carry on
+		if (req.isAuthenticated())
+			return next();
+
+		// if they aren't redirect them to the home page
+		res.redirect('/');
+	}
+
 
 
 }
